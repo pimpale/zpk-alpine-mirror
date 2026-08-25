@@ -16,10 +16,11 @@ def _command_error(command: str, error: subprocess.CalledProcessError) -> str:
     return f"{command} failed with exit code {error.returncode}"
 
 
-def convert_apk(apk_path: Path) -> Path:
-    """Extract one Alpine APK and atomically replace its corresponding ZIP."""
+def convert_apk(apk_path: Path, zip_path: Path) -> Path:
+    """Extract one Alpine APK and atomically write its ZIP."""
     apk_path = apk_path.resolve()
-    zip_path = apk_path.with_suffix(".zip")
+    zip_path = zip_path.resolve()
+    zip_path.parent.mkdir(parents=True, exist_ok=True)
 
     with tempfile.TemporaryDirectory(
         prefix=f".apk2zpk-{apk_path.stem}-", dir=zip_path.parent
@@ -77,9 +78,10 @@ def _positive_integer(value: str) -> int:
 
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Convert every Alpine .apk below a directory to a .zip file."
+        description="Convert an Alpine APK repository into a separate ZIP repository."
     )
-    parser.add_argument("repository", type=Path, help="repository directory to convert")
+    parser.add_argument("source", type=Path, help="APK repository to read")
+    parser.add_argument("destination", type=Path, help="ZIP repository to write")
     parser.add_argument(
         "-j",
         "--jobs",
@@ -90,15 +92,26 @@ def _parser() -> argparse.ArgumentParser:
     return parser
 
 
-def run(repository: Path, jobs: int) -> int:
-    repository = repository.resolve()
-    if not repository.is_dir():
-        print(f"apk2zpk: not a directory: {repository}", file=sys.stderr)
+def run(source: Path, destination: Path, jobs: int) -> int:
+    source = source.resolve()
+    destination = destination.resolve()
+
+    if not source.is_dir():
+        print(f"apk2zpk: not a directory: {source}", file=sys.stderr)
         return 2
 
-    apk_paths = sorted(path for path in repository.rglob("*.apk") if path.is_file())
+    if destination == source or source in destination.parents:
+        print(
+            "apk2zpk: destination must be separate from and outside the source repository",
+            file=sys.stderr,
+        )
+        return 2
+
+    destination.mkdir(parents=True, exist_ok=True)
+
+    apk_paths = sorted(path for path in source.rglob("*.apk") if path.is_file())
     if not apk_paths:
-        print(f"apk2zpk: no .apk files found below {repository}")
+        print(f"apk2zpk: no .apk files found below {source}")
         return 0
 
     failures: list[tuple[Path, str]] = []
@@ -106,7 +119,14 @@ def run(repository: Path, jobs: int) -> int:
 
     print(f"apk2zpk: converting {len(apk_paths)} packages with {jobs} workers")
     with ProcessPoolExecutor(max_workers=jobs) as executor:
-        futures = {executor.submit(convert_apk, path): path for path in apk_paths}
+        futures = {
+            executor.submit(
+                convert_apk,
+                path,
+                destination / path.relative_to(source).with_suffix(".zip"),
+            ): path
+            for path in apk_paths
+        }
         for future in as_completed(futures):
             apk_path = futures[future]
             try:
@@ -127,4 +147,4 @@ def run(repository: Path, jobs: int) -> int:
 
 def main(argv: Sequence[str] | None = None) -> None:
     arguments = _parser().parse_args(argv)
-    raise SystemExit(run(arguments.repository, arguments.jobs))
+    raise SystemExit(run(arguments.source, arguments.destination, arguments.jobs))

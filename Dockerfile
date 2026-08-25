@@ -32,10 +32,10 @@ COPY src/ ./src/
 RUN uv sync --no-dev
 
 COPY --from=repo /repo /repo
-RUN uv run --no-sync apk2zpk /repo
+RUN uv run --no-sync apk2zpk /repo /converted-repo
 
 
 FROM nginx:alpine
 
-COPY --from=converter /repo /srv/alpine
+COPY --from=converter /converted-repo /srv/alpine
 COPY default.conf.template /etc/nginx/templates/default.conf.template
